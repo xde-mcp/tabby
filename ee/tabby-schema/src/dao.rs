@@ -15,6 +15,7 @@ use crate::{
     notification::{Notification, NotificationRecipient},
     page,
     repository::RepositoryKind,
+    retrieval,
     schema::{
         auth::{self, LdapCredential, OAuthCredential, OAuthProvider},
         email::{AuthMethod, EmailSetting, Encryption},
@@ -26,7 +27,7 @@ use crate::{
         user_event::{EventKind, UserEvent},
         CoreError,
     },
-    thread,
+    thread::{self},
 };
 
 impl From<InvitationDAO> for auth::Invitation {
@@ -278,7 +279,6 @@ impl From<AttachmentCodeFileList> for thread::MessageAttachmentCodeFileList {
 pub fn from_thread_message_attachment_document(
     doc: AttachmentDoc,
     author: Option<UserValue>,
-    committer: Option<UserValue>,
 ) -> thread::MessageAttachmentDoc {
     match doc {
         AttachmentDoc::Web(web) => {
@@ -309,15 +309,10 @@ pub fn from_thread_message_attachment_document(
         }
         AttachmentDoc::Commit(commit) => {
             thread::MessageAttachmentDoc::Commit(thread::MessageAttachmentCommitDoc {
-                git_url: commit.git_url,
                 sha: commit.sha,
                 message: commit.message,
                 author,
                 author_at: commit.author_at,
-                committer,
-                commit_at: commit.commit_at,
-                diff: commit.diff,
-                changed_file: commit.changed_file,
             })
         }
     }
@@ -352,19 +347,12 @@ impl From<&thread::MessageAttachmentDoc> for AttachmentDoc {
             }),
             thread::MessageAttachmentDoc::Commit(val) => {
                 AttachmentDoc::Commit(AttachmentCommitDoc {
-                    git_url: val.git_url.clone(),
                     sha: val.sha.clone(),
                     message: val.message.clone(),
                     author_user_id: val.author.as_ref().map(|x| match x {
                         UserValue::UserSecured(user) => user.id.to_string(),
                     }),
                     author_at: val.author_at,
-                    committer_user_id: val.committer.as_ref().map(|x| match x {
-                        UserValue::UserSecured(user) => user.email.clone(),
-                    }),
-                    commit_at: val.commit_at,
-                    diff: val.diff.clone(),
-                    changed_file: val.changed_file.clone(),
                 })
             }
         }
@@ -389,6 +377,7 @@ impl From<PageDAO> for page::Page {
             id: value.id.as_id(),
             author_id: value.author_id.as_id(),
             title: value.title,
+            code_source_id: value.code_source_id,
             content: value.content,
             created_at: value.created_at,
             updated_at: value.updated_at,
@@ -396,8 +385,19 @@ impl From<PageDAO> for page::Page {
     }
 }
 
-impl From<PageSectionDAO> for page::Section {
+impl From<PageSectionDAO> for page::PageSection {
     fn from(value: PageSectionDAO) -> Self {
+        let (code, code_file_list) = if let Some(attachment) = value.attachment {
+            let code = attachment
+                .0
+                .code
+                .map(|x| x.iter().map(|x| x.into()).collect());
+            let code_file_list = attachment.0.code_file_list.map(|x| x.into());
+
+            (code, code_file_list)
+        } else {
+            (None, None)
+        };
         Self {
             id: value.id.as_id(),
             page_id: value.page_id.as_id(),
@@ -406,6 +406,46 @@ impl From<PageSectionDAO> for page::Section {
             content: value.content.unwrap_or_default(),
             created_at: value.created_at,
             updated_at: value.updated_at,
+
+            attachments: page::SectionAttachment {
+                code: code.unwrap_or_default(),
+                code_file_list,
+            },
+        }
+    }
+}
+
+impl From<&retrieval::AttachmentCode> for AttachmentCode {
+    fn from(value: &retrieval::AttachmentCode) -> Self {
+        Self {
+            git_url: value.git_url.clone(),
+            commit: value.commit.clone(),
+            filepath: value.filepath.clone(),
+            language: value.language.clone(),
+            content: value.content.clone(),
+            start_line: value.start_line.map(|x| x as usize),
+        }
+    }
+}
+
+impl From<&AttachmentCode> for retrieval::AttachmentCode {
+    fn from(value: &AttachmentCode) -> Self {
+        Self {
+            git_url: value.git_url.clone(),
+            commit: value.commit.clone(),
+            filepath: value.filepath.clone(),
+            language: value.language.clone(),
+            content: value.content.clone(),
+            start_line: value.start_line.map(|x| x as i32),
+        }
+    }
+}
+
+impl From<AttachmentCodeFileList> for retrieval::AttachmentCodeFileList {
+    fn from(value: AttachmentCodeFileList) -> Self {
+        Self {
+            file_list: value.file_list,
+            truncated: value.truncated,
         }
     }
 }

@@ -2,7 +2,6 @@
 
 import { ReactNode, useContext, useMemo } from 'react'
 import { Maybe } from 'graphql/jsutils/Maybe'
-import { isNil } from 'lodash-es'
 
 import {
   ContextSource,
@@ -46,6 +45,7 @@ import {
   TooltipContent,
   TooltipTrigger
 } from '@/components/ui/tooltip'
+import { CodeRangeLabel } from '@/components/code-range-label'
 import { DocDetailView } from '@/components/message-markdown/doc-detail-view'
 import { SourceIcon } from '@/components/source-icon'
 
@@ -62,17 +62,7 @@ interface ReadingCodeStepperProps {
   className?: string
   serverCodeContexts: RelevantCodeContext[]
   clientCodeContexts: RelevantCodeContext[]
-  webResources?: Maybe<AttachmentDocItem[]> | undefined
-  commitResources?:
-    | Maybe<
-        Array<
-          Extract<
-            AttachmentDocItem,
-            { __typename: 'MessageAttachmentCommitDoc' }
-          >
-        >
-      >
-    | undefined
+  docs?: Maybe<AttachmentDocItem[]> | undefined
   docQueryResources: Omit<ContextSource, 'id'>[] | undefined
   onContextClick?: (
     context: RelevantCodeContext,
@@ -90,8 +80,7 @@ export function ReadingCodeStepper({
   codeSourceId,
   serverCodeContexts,
   clientCodeContexts,
-  webResources,
-  commitResources,
+  docs,
   codeFileList,
   onContextClick
 }: ReadingCodeStepperProps) {
@@ -99,8 +88,8 @@ export function ReadingCodeStepper({
   const totalContextLength =
     (clientCodeContexts?.length || 0) +
     serverCodeContexts.length +
-    (webResources?.length || 0) +
-    (commitResources?.length || 0)
+    (docs?.length || 0)
+
   const targetRepo = useMemo(() => {
     if (!codeSourceId) return undefined
 
@@ -118,14 +107,11 @@ export function ReadingCodeStepper({
     if (readingCode?.snippet) {
       result.push('snippet')
     }
-    if (commitResources?.length) {
-      result.push('commits')
-    }
     if (docQuery) {
       result.push('docs')
     }
     return result
-  }, [readingCode?.fileList, readingCode?.snippet, commitResources, docQuery])
+  }, [readingCode?.fileList, readingCode?.snippet, docQuery])
 
   const lastItem = useMemo(() => {
     return steps.slice().pop()
@@ -204,7 +190,8 @@ export function ReadingCodeStepper({
                 defaultOpen={!isReadingCode}
                 isLastItem={lastItem === 'snippet'}
               >
-                {!!totalContextLength && (
+                {(!!clientCodeContexts?.length ||
+                  !!serverCodeContexts?.length) && (
                   <div className="mb-3 mt-2">
                     <div className="flex flex-wrap gap-2 text-xs font-semibold">
                       {clientCodeContexts?.map((item, index) => {
@@ -233,55 +220,23 @@ export function ReadingCodeStepper({
                 )}
               </StepItem>
             )}
-            {!!commitResources?.length && (
-              <StepItem
-                key="commits"
-                title="Search for relevant Commits ..."
-                isLastItem={lastItem === 'commits'}
-                isLoading={isReadingDocs}
-              >
-                {!!commitResources?.length && (
-                  <div className="mb-3 mt-2 space-y-1">
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      {commitResources?.map((x, index) => {
-                        return (
-                          <div key={`${x.sha}_${index}`}>
-                            <HoverCard openDelay={100} closeDelay={100}>
-                              <HoverCardTrigger>
-                                <CodebaseDocView doc={x} />
-                              </HoverCardTrigger>
-                              <HoverCardContent className="w-96 bg-background text-sm text-foreground dark:border-muted-foreground/60">
-                                <DocDetailView
-                                  enableDeveloperMode={enableDeveloperMode}
-                                  relevantDocument={x}
-                                />
-                              </HoverCardContent>
-                            </HoverCard>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-              </StepItem>
-            )}
             {docQuery && (
               <StepItem
                 key="docs"
-                title="Search for relevant Issues/PRs ..."
+                title="Collect documents ..."
                 isLastItem={lastItem === 'docs'}
                 isLoading={isReadingDocs}
               >
-                {!!webResources?.length && (
+                {!!docs?.length && (
                   <div className="mb-3 mt-2 space-y-1">
                     <div className="flex flex-wrap items-center gap-2 text-xs">
-                      {webResources?.map((x, index) => {
-                        const link =
+                      {docs?.map((x, index) => {
+                        const _key =
                           x.__typename === 'MessageAttachmentCommitDoc'
-                            ? `${x.gitUrl}/blob/${x.sha}/${x.changedFile}`
+                            ? x.sha
                             : x.link
                         return (
-                          <div key={`${link}_${index}`}>
+                          <div key={`${_key}_${index}`}>
                             <HoverCard openDelay={100} closeDelay={100}>
                               <HoverCardTrigger>
                                 <CodebaseDocView doc={x} />
@@ -321,30 +276,12 @@ function CodeContextItem({
   onContextClick,
   enableDeveloperMode
 }: CodeContextItemProps) {
-  const isMultiLine =
-    context.range &&
-    !isNil(context.range?.start) &&
-    !isNil(context.range?.end) &&
-    context.range.start < context.range.end
   const pathSegments = context.filepath.split('/')
   const path = pathSegments.slice(0, pathSegments.length - 1).join('/')
 
   const fileName = useMemo(() => {
     return resolveFileNameForDisplay(context.filepath)
   }, [context.filepath])
-
-  const rangeText = useMemo(() => {
-    if (!context.range) return undefined
-
-    let text = ''
-    if (context.range.start) {
-      text = String(context.range.start)
-    }
-    if (isMultiLine) {
-      text += `-${context.range.end}`
-    }
-    return text
-  }, [context.range])
 
   const scores = context?.extra?.scores
 
@@ -367,15 +304,12 @@ function CodeContextItem({
           <IconFileText className="h-3 w-3" />
           <span>
             <span>{fileName}</span>
-            {rangeText ? (
-              <span
-                className={cn('font-normal text-muted-foreground', {
-                  'group-hover:text-foreground': clickable
-                })}
-              >
-                :{rangeText}
-              </span>
-            ) : null}
+            <CodeRangeLabel
+              className={cn('font-normal text-muted-foreground', {
+                'group-hover:text-foreground': clickable
+              })}
+              range={context.range}
+            ></CodeRangeLabel>
           </span>
         </div>
       </TooltipTrigger>
@@ -383,9 +317,7 @@ function CodeContextItem({
         <div className="space-y-2">
           <div className="whitespace-nowrap font-medium">
             <span>{fileName}</span>
-            {rangeText ? (
-              <span className="text-muted-foreground">:{rangeText}</span>
-            ) : null}
+            <CodeRangeLabel range={context.range} />
           </div>
           {!!path && (
             <div className="break-all text-xs text-muted-foreground">
@@ -426,9 +358,7 @@ function CodebaseDocView({ doc }: { doc: AttachmentDocItem }) {
   const docName = isCommit
     ? `${doc.sha.slice(0, 7)}`
     : `#${doc.link.split('/').pop()}`
-  const link = isCommit
-    ? `${doc.gitUrl}/blob/${doc.sha}/${doc.changedFile}`
-    : doc.link
+  const link = isCommit ? undefined : doc.link
 
   let icon: ReactNode = null
   if (isIssue) {
@@ -451,8 +381,17 @@ function CodebaseDocView({ doc }: { doc: AttachmentDocItem }) {
 
   return (
     <div
-      className="flex cursor-pointer flex-nowrap items-center gap-0.5 rounded-md bg-muted px-1.5 py-0.5 font-semibold hover:text-foreground"
-      onClick={() => window.open(link)}
+      className={cn(
+        'flex flex-nowrap items-center gap-0.5 rounded-md bg-muted px-1.5 py-0.5 font-semibold hover:text-foreground',
+        {
+          'cursor-pointer': !!link
+        }
+      )}
+      onClick={() => {
+        if (link) {
+          window.open(link)
+        }
+      }}
     >
       {icon}
       <span>{docName}</span>

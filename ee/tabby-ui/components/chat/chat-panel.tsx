@@ -2,7 +2,6 @@ import React, { RefObject, useMemo, useState } from 'react'
 import slugify from '@sindresorhus/slugify'
 import { Content, EditorEvents } from '@tiptap/core'
 import { useWindowSize } from '@uidotdev/usehooks'
-import type { UseChatHelpers } from 'ai/react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { compact } from 'lodash-es'
 import { toast } from 'sonner'
@@ -30,7 +29,6 @@ import {
   IconCheck,
   IconEye,
   IconEyeOff,
-  IconFile,
   IconFileText,
   IconRefresh,
   IconRemove,
@@ -47,7 +45,7 @@ import { isSameFileContext } from './form-editor/utils'
 import { RepoSelect } from './repo-select'
 import { PromptFormRef } from './types'
 
-export interface ChatPanelProps extends Pick<UseChatHelpers, 'stop' | 'input'> {
+export interface ChatPanelProps {
   setInput: (v: string) => void
   id?: string
   className?: string
@@ -55,6 +53,8 @@ export interface ChatPanelProps extends Pick<UseChatHelpers, 'stop' | 'input'> {
   onUpdate: (p: EditorEvents['update']) => void
   reload: () => void
   chatInputRef: RefObject<PromptFormRef>
+  input: string
+  stop: () => void
 }
 
 export interface ChatPanelRef {
@@ -146,7 +146,6 @@ export const ChatPanel = React.forwardRef<ChatPanelRef, ChatPanelProps>(
 
       const currentContext: FileContext = relevantContext[idx]
       state.doc.descendants((node, pos) => {
-        // TODO: use a easy way to dealling with mention node
         if (
           node.type.name === 'mention' &&
           (node.attrs.category === 'file' || node.attrs.category === 'symbol')
@@ -284,9 +283,10 @@ export const ChatPanel = React.forwardRef<ChatPanelRef, ChatPanelProps>(
             id="chat-panel-container"
             className="rounded-md border bg-background px-4 pb-1.5 pt-3 outline-none transition-shadow duration-300 focus-within:ring-1 focus-within:!ring-ring hover:ring-1 hover:ring-ring/60 focus-visible:ring-offset-2"
           >
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex w-full flex-wrap gap-1.5">
               <RepoSelect
                 id="repo-select"
+                className="overflow-hidden"
                 value={selectedRepoId}
                 onChange={onSelectRepo}
                 repos={repos}
@@ -304,7 +304,7 @@ export const ChatPanel = React.forwardRef<ChatPanelRef, ChatPanelProps>(
                     }
                   )}
                 >
-                  <IconFileText />
+                  <IconFileText className="shrink-0" />
                   <ContextLabel
                     context={activeSelection}
                     className="flex-1 truncate"
@@ -326,7 +326,7 @@ export const ChatPanel = React.forwardRef<ChatPanelRef, ChatPanelProps>(
               ) : null}
               <AnimatePresence>
                 {relevantContext.map((item, idx) => {
-                  // `git_url + filepath + range` as unique key
+                  // `gitUrl + filepath + range` as unique key
                   const key = `${item.gitUrl}_${item.filepath}_${item.range?.start}_${item.range?.end}`
                   return (
                     <motion.div
@@ -339,17 +339,18 @@ export const ChatPanel = React.forwardRef<ChatPanelRef, ChatPanelProps>(
                       }}
                       exit={{ opacity: 0, scale: 0.9, y: -5 }}
                       layout
+                      className="overflow-hidden"
                     >
                       <Badge
                         variant="outline"
                         className={cn(
-                          'inline-flex h-7 cursor-pointer flex-nowrap items-center gap-1 overflow-hidden rounded-md pr-0 text-sm font-semibold'
+                          'inline-flex h-7 w-full cursor-pointer flex-nowrap items-center gap-1 overflow-hidden rounded-md pr-0 text-sm font-semibold'
                         )}
                         onClick={() => {
                           openInEditor(getFileLocationFromContext(item))
                         }}
                       >
-                        <IconFile className="shrink-0" />
+                        <IconFileText className="shrink-0" />
                         <ContextLabel context={item} />
                         <Button
                           size="icon"
