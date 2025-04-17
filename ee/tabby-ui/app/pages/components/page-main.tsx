@@ -9,7 +9,10 @@ import { toast } from 'sonner'
 import { useQuery } from 'urql'
 
 import { ERROR_CODE_NOT_FOUND, SLUG_TITLE_MAX_LENGTH } from '@/lib/constants'
-import { useEnableDeveloperMode } from '@/lib/experiment-flags'
+import {
+  useEnableDeveloperMode,
+  useEnableSearchPages
+} from '@/lib/experiment-flags'
 import {
   CreatePageRunSubscription,
   CreatePageSectionRunSubscription,
@@ -31,7 +34,7 @@ import {
 import { ExtendedCombinedError } from '@/lib/types'
 import { cn, isCodeSourceContext, nanoid } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { IconBug } from '@/components/ui/icons'
+import { IconBug, IconStop } from '@/components/ui/icons'
 import {
   ResizableHandle,
   ResizablePanel,
@@ -54,7 +57,12 @@ import {
   movePageSectionPositionMutation
 } from '../lib/query'
 import { formatTime } from '../lib/utils'
-import { DebugData, PageItem, SectionItem } from '../types'
+import {
+  DebugData,
+  PageItem,
+  SectionDebugDataItem,
+  SectionItem
+} from '../types'
 import { ErrorView } from './error-view'
 import { Header } from './header'
 import { Navbar } from './nav-bar'
@@ -82,6 +90,7 @@ export function Page() {
     query: contextInfoQuery
   })
   const [enableDeveloperMode] = useEnableDeveloperMode()
+  const [enableSearchPages] = useEnableSearchPages()
   const { updateUrlComponents, pathname, router } = useRouterStuff()
   const [activePathname, setActivePathname] = useState<string | undefined>()
   const [isPathnameInitialized, setIsPathnameInitialized] = useState(false)
@@ -117,6 +126,7 @@ export function Page() {
   const devPanelRef = useRef<ImperativePanelHandle>(null)
   const [devPanelSize, setDevPanelSize] = useState(45)
   const prevDevPanelSize = useRef(devPanelSize)
+  const [stopGenerateVisible, setStopGenerateVisible] = useState(false)
 
   const pageIdFromURL = useMemo(() => {
     const regex = /^\/pages\/(.*)/
@@ -137,7 +147,21 @@ export function Page() {
     setPendingSectionIds(new Set())
     setCurrentSectionId(undefined)
     setPageCompleted(true)
+    setStopGenerateVisible(false)
   })
+
+  const onStopGenerating = () => {
+    stop.current()
+
+    if (isLoading) {
+      // remove empty sections
+      setSections(prev => {
+        if (!prev) return prev
+        return prev.filter(x => !!x.content)
+      })
+      setPendingSectionIds(new Set())
+    }
+  }
 
   const updateDebugData = (data: DebugData | undefined | null) => {
     if (!data) return
@@ -155,20 +179,50 @@ export function Page() {
             ])
           )
         }
-      } else if ('generateSectionContentMessages' in data) {
-        return {
-          ...prev,
-          generateSectionContentMessages: compact(
-            flatten([
-              prev.generateSectionContentMessages,
-              data.generateSectionContentMessages
-            ])
-          )
-        }
       } else {
         return {
           ...prev,
           ...omit(data, '__typename')
+        }
+      }
+    })
+  }
+  const updateSectionDebugData = (
+    debugData: SectionDebugDataItem | null | undefined,
+    sectionId: string | undefined
+  ) => {
+    if (!debugData || !sectionId) return
+    setDebugData(prev => {
+      if (!prev) {
+        return {
+          sections: [
+            {
+              id: sectionId,
+              ...debugData
+            }
+          ]
+        }
+      }
+
+      const sections = prev.sections || []
+      let target = sections.find(s => s.id === sectionId)
+      if (target) {
+        return {
+          ...prev,
+          sections: sections.map(x => {
+            if (x.id === sectionId) {
+              return {
+                ...x,
+                ...debugData
+              }
+            }
+            return x
+          })
+        }
+      } else {
+        return {
+          ...prev,
+          sections: sections.concat([{ id: sectionId, ...debugData }])
         }
       }
     })
@@ -192,7 +246,6 @@ export function Page() {
   }
 
   const processPageRunItemStream = (data: PageRunItem) => {
-    // debugger
     switch (data.__typename) {
       case 'PageCreated': {
         setPageId(data.id)
@@ -208,6 +261,7 @@ export function Page() {
         })
         updateDebugData(data.debugData)
         setIsGeneratingPageTitle(false)
+        setStopGenerateVisible(true)
         updatePageURL(data)
         break
       }
@@ -238,7 +292,6 @@ export function Page() {
         }))
         setPendingSectionIds(new Set(data.sections.map(x => x.id)))
         setSections(nextSections)
-
         updateDebugData(data.debugData)
         break
       }
@@ -283,6 +336,11 @@ export function Page() {
             return x
           })
         })
+        // group by id
+        const debugData: SectionDebugDataItem | undefined = data.debugData
+          ? { attachmentCodeQuery: data.debugData }
+          : undefined
+        updateSectionDebugData(debugData, data.id)
         break
       }
       case 'PageSectionAttachmentDoc': {
@@ -305,6 +363,12 @@ export function Page() {
             return x
           })
         })
+
+        // group by id
+        const debugData: SectionDebugDataItem | undefined = data.debugData
+          ? { attachmentDocQuery: data.debugData }
+          : undefined
+        updateSectionDebugData(debugData, data.id)
         break
       }
       case 'PageSectionContentDelta': {
@@ -335,7 +399,14 @@ export function Page() {
           return newSet
         })
 
-        updateDebugData(data.debugData)
+        // group by id
+        const debugData = data.debugData?.generateSectionContentMessages
+          ? {
+              generateSectionContentMessages:
+                data.debugData.generateSectionContentMessages
+            }
+          : undefined
+        updateSectionDebugData(debugData, data.id)
         break
       }
       case 'PageCompleted':
@@ -350,7 +421,7 @@ export function Page() {
     data: CreatePageSectionRunSubscription['createPageSectionRun']
   ) => {
     switch (data.__typename) {
-      case 'PageSection': {
+      case 'PageSectionCreated': {
         const { id, title, position } = data
         setCurrentSectionId(id)
         setPendingSectionIds(new Set([id]))
@@ -374,6 +445,7 @@ export function Page() {
           ]
         })
         updateDebugData(data.debugData)
+        setStopGenerateVisible(true)
         break
       }
       case 'PageSectionContentDelta': {
@@ -433,6 +505,11 @@ export function Page() {
             }
           })
         })
+        // group by id
+        const debugData: SectionDebugDataItem | undefined = data.debugData
+          ? { attachmentCodeQuery: data.debugData }
+          : undefined
+        updateSectionDebugData(debugData, data.id)
         break
       }
       case 'PageSectionAttachmentDoc': {
@@ -455,10 +532,24 @@ export function Page() {
             return x
           })
         })
+        // group by id
+        const debugData: SectionDebugDataItem | undefined = data.debugData
+          ? { attachmentDocQuery: data.debugData }
+          : undefined
+        updateSectionDebugData(debugData, data.id)
         break
       }
       case 'PageSectionContentCompleted': {
-        updateDebugData(data.debugData)
+        // group by id
+        const debugData: SectionDebugDataItem | undefined = data.debugData
+          ?.generateSectionContentMessages?.length
+          ? {
+              generateSectionContentMessages:
+                data.debugData.generateSectionContentMessages
+            }
+          : undefined
+        updateSectionDebugData(debugData, data.id)
+
         stop.current()
         break
       }
@@ -498,13 +589,17 @@ export function Page() {
           pageId,
           titlePrompt: title,
           docQuery: {
-            sourceIds: compact([page?.codeSourceId]),
+            sourceIds: compact([
+              page?.codeSourceId,
+              enableSearchPages.value ? 'page' : undefined
+            ]),
             content: title,
-            searchPublic: true
+            searchPublic: false
           },
           debugOption: enableDeveloperMode?.value
             ? {
-                returnChatCompletionRequest: true
+                returnChatCompletionRequest: true,
+                returnQueryRequest: true
               }
             : undefined
         }
@@ -547,7 +642,15 @@ export function Page() {
 
     const { unsubscribe } = client
       .subscription(createThreadToPageRunSubscription, {
-        threadId
+        input: {
+          threadId,
+          debugOption: enableDeveloperMode?.value
+            ? {
+                returnChatCompletionRequest: true,
+                returnQueryRequest: true
+              }
+            : undefined
+        }
       })
       .subscribe(res => {
         if (res?.error) {
@@ -603,19 +706,22 @@ export function Page() {
               }
             : null,
           docQuery: {
-            sourceIds: compact([codeSourceId]),
+            sourceIds: compact([
+              codeSourceId,
+              enableSearchPages.value ? 'page' : undefined
+            ]),
             content: titlePrompt,
-            searchPublic: true
+            searchPublic: false
           },
           debugOption: enableDeveloperMode?.value
             ? {
-                returnChatCompletionRequest: true
+                returnChatCompletionRequest: true,
+                returnQueryRequest: true
               }
             : undefined
         }
       })
       .subscribe(res => {
-        // console.log(res)
         if (res?.error) {
           setIsLoading(false)
           setError(res.error)
@@ -1102,6 +1208,11 @@ export function Page() {
                                     key={`section_${section.id}`}
                                     exit={{ opacity: 0 }}
                                     className="space-y-2"
+                                    transition={
+                                      isLoading
+                                        ? { duration: 0 }
+                                        : { duration: 0.3 }
+                                    }
                                   >
                                     <SectionTitle
                                       className="pt-12 prose-p:leading-tight"
@@ -1147,7 +1258,31 @@ export function Page() {
                     )}
                   </div>
                 </ScrollArea>
-
+                {stopGenerateVisible && (
+                  <div className="fixed bottom-16 w-full">
+                    <div className="mx-auto grid grid-cols-4 gap-2 lg:max-w-5xl">
+                      <motion.div
+                        className="col-span-3 flex h-px justify-center overflow-y-visible"
+                        animate={{ opacity: 100, y: 0 }}
+                        initial={{ opacity: 0, y: 20 }}
+                        transition={{
+                          ease: 'easeInOut',
+                          duration: 0.4,
+                          delay: 0.5
+                        }}
+                      >
+                        <Button
+                          onClick={onStopGenerating}
+                          variant="outline"
+                          className="gap-2 bg-background"
+                        >
+                          <IconStop />
+                          stop generating
+                        </Button>
+                      </motion.div>
+                    </div>
+                  </div>
+                )}
                 <ButtonScrollToBottom
                   className={cn(
                     '!fixed !bottom-[5.4rem] !right-4 !top-auto z-40 border-muted-foreground lg:!bottom-[2.85rem]'

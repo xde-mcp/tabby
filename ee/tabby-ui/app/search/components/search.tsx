@@ -18,7 +18,10 @@ import { toast } from 'sonner'
 import { useQuery } from 'urql'
 
 import { ERROR_CODE_NOT_FOUND, SLUG_TITLE_MAX_LENGTH } from '@/lib/constants'
-import { useEnableDeveloperMode } from '@/lib/experiment-flags'
+import {
+  useEnableDeveloperMode,
+  useEnableSearchPages
+} from '@/lib/experiment-flags'
 import { graphql } from '@/lib/gql/generates'
 import {
   CodeQueryInput,
@@ -127,6 +130,7 @@ export function Search() {
   const [devPanelSize, setDevPanelSize] = useState(45)
   const prevDevPanelSize = useRef(devPanelSize)
   const [enableDeveloperMode] = useEnableDeveloperMode()
+  const [enableSearchPages] = useEnableSearchPages()
   const [threadId, setThreadId] = useState<string | undefined>()
   const threadIdFromURL = useMemo(() => {
     const regex = /^\/search\/(.*)/
@@ -298,17 +302,24 @@ export function Search() {
 
   const valueForDev = useMemo(() => {
     if (currentMessageForDev) {
-      return pick(currentMessageForDev?.attachment, 'doc', 'code')
+      return {
+        debugData: currentMessageForDev?.debugData ?? null,
+        ...pick(currentMessageForDev?.attachment, 'doc', 'code')
+      }
     }
     return {
       answers: messages
         .filter(o => o.role === Role.Assistant)
-        .map(o => pick(o, 'doc', 'code'))
+        .map(o => ({
+          debugData: o.debugData ?? null,
+          ...pick(o, 'doc', 'code')
+        }))
     }
   }, [
     messageIdForDev,
     currentMessageForDev?.attachment?.code,
-    currentMessageForDev?.attachment?.doc
+    currentMessageForDev?.attachment?.doc,
+    currentMessageForDev?.debugData
   ])
 
   const qaPairs = useMemo(() => {
@@ -485,6 +496,9 @@ export function Search() {
     // update expose steps
     currentAssistantMessage.readingCode = answer?.readingCode
 
+    // debug data
+    currentAssistantMessage.debugData = answer?.debugData
+
     // update message pair ids
     const newUserMessageId = answer.userMessageId
     const newAssistantMessageId = answer.assistantMessageId
@@ -557,7 +571,7 @@ export function Search() {
 
   const onSubmitSearch = (question: string, ctx?: ThreadRunContexts) => {
     const { sourceIdForCodeQuery, sourceIdsForDocQuery, searchPublic } =
-      getSourceInputs(codeSourceIdInThread, ctx)
+      getSourceInputs(codeSourceIdInThread, enableSearchPages.value, ctx)
 
     const newUserMessageId = tempNanoId()
     const newAssistantMessageId = tempNanoId()
@@ -595,7 +609,12 @@ export function Search() {
         generateRelevantQuestions: true,
         codeQuery,
         docQuery,
-        modelName: ctx?.modelName
+        modelName: ctx?.modelName,
+        debugOptions: enableDeveloperMode?.value
+          ? {
+              returnChatCompletionRequest: true
+            }
+          : undefined
       }
     )
   }
@@ -642,7 +661,11 @@ export function Search() {
     )
 
     const { sourceIdForCodeQuery, sourceIdsForDocQuery, searchPublic } =
-      getSourceInputs(codeSourceId, getThreadRunContextsFromMentions(mentions))
+      getSourceInputs(
+        codeSourceId,
+        enableSearchPages.value,
+        getThreadRunContextsFromMentions(mentions)
+      )
 
     const codeQuery: InputMaybe<CodeQueryInput> = sourceIdForCodeQuery
       ? { sourceId: sourceIdForCodeQuery, content: newUserMessage.content }
@@ -669,7 +692,12 @@ export function Search() {
         generateRelevantQuestions: true,
         codeQuery,
         docQuery,
-        modelName: selectedModel
+        modelName: selectedModel,
+        debugOptions: enableDeveloperMode?.value
+          ? {
+              returnChatCompletionRequest: true
+            }
+          : undefined
       }
     })
   }
@@ -798,6 +826,7 @@ export function Search() {
               streamingDone={!isLoading}
               threadId={threadId}
               onConvertToPage={onConvertToPage}
+              onShare={onClickShare}
             />
             <LoadingWrapper
               loading={!isReady}
@@ -1028,6 +1057,7 @@ function ThreadMessagesErrorView({
 
 function getSourceInputs(
   repositorySourceId: string | undefined,
+  enableSearchPages: boolean,
   ctx: ThreadRunContexts | undefined
 ) {
   let sourceIdsForDocQuery: string[] = compact([repositorySourceId])
@@ -1037,7 +1067,13 @@ function getSourceInputs(
   if (ctx) {
     sourceIdsForDocQuery = uniq(
       // Compatible with existing user messages
-      compact([repositorySourceId, ctx?.codeSourceId].concat(ctx.docSourceIds))
+      compact(
+        [
+          repositorySourceId,
+          ctx?.codeSourceId,
+          enableSearchPages ? 'page' : undefined
+        ].concat(ctx.docSourceIds)
+      )
     )
     searchPublic = ctx.searchPublic ?? false
     sourceIdForCodeQuery = repositorySourceId || ctx.codeSourceId || undefined

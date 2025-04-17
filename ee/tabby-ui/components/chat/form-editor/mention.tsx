@@ -24,7 +24,12 @@ import {
 } from 'tabby-chat-panel/index'
 
 import { useDebounceValue } from '@/lib/hooks/use-debounce'
-import { cn, convertFromFilepath, resolveFileNameForDisplay } from '@/lib/utils'
+import {
+  cn,
+  convertFromFilepath,
+  resolveDirectoryPath,
+  resolveFileNameForDisplay
+} from '@/lib/utils'
 import { IconChevronLeft, IconChevronRight } from '@/components/ui/icons'
 
 import type { CategoryItem, CategoryMenu, FileItem, SourceItem } from '../types'
@@ -431,8 +436,7 @@ interface OptionItemView extends HTMLAttributes<HTMLDivElement> {
 function OptionItemView({ isSelected, data, ...rest }: OptionItemView) {
   const ref = useRef<HTMLDivElement>(null)
   const filepathWithoutFilename = useMemo(() => {
-    if (!data.filepath) return ''
-    return data.filepath ? data.filepath.split('/').slice(0, -1).join('/') : ''
+    return resolveDirectoryPath(data.filepath || '')
   }, [data.filepath])
 
   useLayoutEffect(() => {

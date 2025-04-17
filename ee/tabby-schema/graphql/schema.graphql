@@ -24,6 +24,7 @@ enum ContextSourceKind {
   GITLAB
   DOC
   WEB
+  PAGE
 }
 
 enum Encryption {
@@ -181,6 +182,11 @@ input CreateThreadRunInput {
   options: ThreadRunOptionsInput! = {codeQuery: null, debugOptions: null, docQuery: null, generateRelevantQuestions: false, modelName: null}
 }
 
+input CreateThreadToPageRunInput {
+  threadId: ID!
+  debugOption: ThreadToPageDebugOptionInput = null
+}
+
 input CreateUserGroupInput {
   "User group name, can only start with a lowercase letter, and contain characters, numbers, and `-` or `_`" name: String!
 }
@@ -217,10 +223,12 @@ input NetworkSettingInput {
 
 input PageRunDebugOptionInput {
   returnChatCompletionRequest: Boolean! = false
+  returnQueryRequest: Boolean! = false
 }
 
 input PageSectionRunDebugOptionInput {
   returnChatCompletionRequest: Boolean! = false
+  returnQueryRequest: Boolean! = false
 }
 
 input PasswordChangeInput {
@@ -265,6 +273,11 @@ input ThreadRunOptionsInput {
   codeQuery: CodeQueryInput = null
   generateRelevantQuestions: Boolean! = false
   debugOptions: ThreadRunDebugOptionsInput = null
+}
+
+input ThreadToPageDebugOptionInput {
+  returnChatCompletionRequest: Boolean! = false
+  returnQueryRequest: Boolean! = false
 }
 
 input UpdateIntegrationInput {
@@ -386,6 +399,11 @@ type AttachmentCodeHit {
   scores: AttachmentCodeScores!
 }
 
+type AttachmentCodeQueryDebugData {
+  sourceId: String!
+  query: String!
+}
+
 type AttachmentCodeScores {
   rrf: Float!
   bm25: Float!
@@ -404,12 +422,23 @@ type AttachmentDocHit {
   score: Float!
 }
 
+type AttachmentDocQueryDebugData {
+  sourceIds: [String!]!
+  query: String!
+}
+
 type AttachmentIssueDoc {
   title: String!
   link: String!
   author: User
   body: String!
   closed: Boolean!
+}
+
+type AttachmentPageDoc {
+  link: String!
+  title: String!
+  content: String!
 }
 
 type AttachmentPullDoc {
@@ -707,6 +736,12 @@ type MessageAttachmentIssueDoc {
   closed: Boolean!
 }
 
+type MessageAttachmentPageDoc {
+  link: String!
+  title: String!
+  content: String!
+}
+
 type MessageAttachmentPullDoc {
   title: String!
   link: String!
@@ -867,6 +902,13 @@ type PageContentDelta {
   delta: String!
 }
 
+type PageContextSource implements ContextSourceId & ContextSource {
+  id: ID!
+  sourceKind: ContextSourceKind!
+  sourceId: String!
+  sourceName: String!
+}
+
 type PageCreated {
   id: ID!
   authorId: ID!
@@ -901,6 +943,7 @@ type PageSection {
 type PageSectionAttachmentCode {
   id: ID!
   codes: [AttachmentCodeHit!]!
+  debugData: AttachmentCodeQueryDebugData
 }
 
 type PageSectionAttachmentCodeFileList {
@@ -911,6 +954,7 @@ type PageSectionAttachmentCodeFileList {
 type PageSectionAttachmentDoc {
   id: ID!
   doc: [AttachmentDocHit!]!
+  debugData: AttachmentDocQueryDebugData
 }
 
 type PageSectionContentCompleted {
@@ -928,13 +972,23 @@ type PageSectionContentDelta {
   delta: String!
 }
 
+type PageSectionCreated {
+  id: ID!
+  pageId: ID!
+  title: String!
+  position: Int!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  debugData: PageSectionDebugData
+}
+
 type PageSectionDebugData {
   "Messages sent to LLM to generate the page section titles."
   generateSectionTitlesMessages: [ChatCompletionMessage!]!
 }
 
 type PageSectionsCreated {
-  sections: [PageSection!]!
+  sections: [PageSectionCreated!]!
   debugData: PageSectionDebugData
 }
 
@@ -1141,7 +1195,7 @@ type Subscription {
     - the page title and a summary of the content.
     - a few sections based on the thread messages.
   """
-  createThreadToPageRun(threadId: ID!): PageRunItem!
+  createThreadToPageRun(input: CreateThreadToPageRunInput!): PageRunItem!
   createPageSectionRun(input: CreatePageSectionRunInput!): SectionRunItem!
 }
 
@@ -1278,15 +1332,15 @@ type WebContextSource implements ContextSourceId & ContextSource {
   sourceName: String!
 }
 
-union AttachmentDoc = AttachmentWebDoc | AttachmentIssueDoc | AttachmentPullDoc | AttachmentCommitDoc
+union AttachmentDoc = AttachmentWebDoc | AttachmentIssueDoc | AttachmentPullDoc | AttachmentCommitDoc | AttachmentPageDoc
 
-union MessageAttachmentDoc = MessageAttachmentWebDoc | MessageAttachmentIssueDoc | MessageAttachmentPullDoc | MessageAttachmentCommitDoc
+union MessageAttachmentDoc = MessageAttachmentWebDoc | MessageAttachmentIssueDoc | MessageAttachmentPullDoc | MessageAttachmentCommitDoc | MessageAttachmentPageDoc
 
 "Schema of page convert stream."
 union PageRunItem = PageCreated | PageContentDelta | PageContentCompleted | PageSectionsCreated | PageSectionAttachmentCodeFileList | PageSectionAttachmentCode | PageSectionAttachmentDoc | PageSectionContentDelta | PageSectionContentCompleted | PageCompleted
 
 "Schema of page convert stream."
-union SectionRunItem = PageSection | PageSectionAttachmentCodeFileList | PageSectionAttachmentCode | PageSectionAttachmentDoc | PageSectionContentDelta | PageSectionContentCompleted
+union SectionRunItem = PageSectionCreated | PageSectionAttachmentCodeFileList | PageSectionAttachmentCode | PageSectionAttachmentDoc | PageSectionContentDelta | PageSectionContentCompleted
 
 """
   Schema of thread run stream.

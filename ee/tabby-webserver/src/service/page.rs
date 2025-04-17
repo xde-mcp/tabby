@@ -11,24 +11,26 @@ use juniper::ID;
 use prompt_tools::{
     prompt_page_content, prompt_page_section_content, prompt_page_section_titles, prompt_page_title,
 };
-use tabby_common::config::PageConfig;
+use tabby_common::{api::structured_doc::DocSearchDocument, config::PageConfig};
 use tabby_db::{DbConn, PageSectionDAO};
 use tabby_inference::ChatCompletionStream;
 use tabby_schema::{
     auth::AuthenticationService,
     context::ContextService,
     page::{
-        CreatePageRunInput, CreatePageSectionRunInput, MoveSectionDirection, Page, PageCompleted,
-        PageContentCompleted, PageContentDebugData, PageContentDelta, PageCreated,
+        AttachmentCodeQueryDebugData, AttachmentDocQueryDebugData, CreatePageRunInput,
+        CreatePageSectionRunInput, CreateThreadToPageRunInput, MoveSectionDirection, Page,
+        PageCompleted, PageContentCompleted, PageContentDebugData, PageContentDelta, PageCreated,
         PageRunDebugOptionInput, PageRunItem, PageRunStream, PageSection,
         PageSectionAttachmentCode, PageSectionAttachmentCodeFileList, PageSectionAttachmentDoc,
         PageSectionContentCompleted, PageSectionContentDebugData, PageSectionContentDelta,
-        PageSectionDebugData, PageSectionsCreated, PageService, PageTitleDebugData,
-        SectionAttachment, SectionRunItem, SectionRunStream, ThreadToPageRunStream,
+        PageSectionDebugData, PageSectionRunDebugOptionInput, PageSectionsCreated, PageService,
+        PageTitleDebugData, SectionAttachment, SectionRunItem, SectionRunStream,
+        ThreadToPageRunStream,
     },
     policy::AccessPolicy,
     retrieval::{AttachmentCodeFileList, AttachmentDocHit},
-    thread::{CodeQueryInput, DocQueryInput, Message, ThreadService},
+    thread::{CodeQueryInput, DocQueryInput, Message, MessageAttachmentDoc, ThreadService},
     AsID, AsRowid, ChatCompletionMessage, CoreError, Result,
 };
 use tracing::error;
@@ -79,19 +81,26 @@ impl PageService for PageServiceImpl {
         &self,
         policy: &AccessPolicy,
         author_id: &ID,
-        thread_id: &ID,
+        input: &CreateThreadToPageRunInput,
     ) -> Result<ThreadToPageRunStream> {
         let _thread = self
             .thread
-            .get(thread_id)
+            .get(&input.thread_id)
             .await?
             .ok_or_else(|| CoreError::NotFound("Thread not found"))?;
 
         let thread_messages = self
             .thread
-            .list_thread_messages(thread_id, None, None, None, None)
+            .list_thread_messages(&input.thread_id, None, None, None, None)
             .await?;
 
+        let debug_option = input
+            .debug_option
+            .as_ref()
+            .map(|d| PageRunDebugOptionInput {
+                return_chat_completion_request: d.return_chat_completion_request,
+                return_query_request: d.return_query_request,
+            });
         self.page_run(
             policy,
             author_id,
@@ -99,7 +108,7 @@ impl PageService for PageServiceImpl {
             None,
             None,
             Some(&thread_messages),
-            None,
+            debug_option.as_ref(),
         )
         .await
     }
@@ -143,13 +152,12 @@ impl PageService for PageServiceImpl {
         let code_source_id = page.code_source_id.clone();
         let doc_query = input.doc_query.clone();
 
-        let debug = input
-            .debug_option
-            .as_ref()
-            .map(|x| x.return_chat_completion_request)
-            .unwrap_or_else(|| false);
         let (new_section_title, section_title_debug_messages) = generate_page_sections(
-            debug,
+            input
+                .debug_option
+                .as_ref()
+                .map(|x| x.return_chat_completion_request)
+                .unwrap_or(false),
             1,
             self.chat.clone(),
             self.context.clone(),
@@ -178,19 +186,30 @@ impl PageService for PageServiceImpl {
         let retrieval = self.retrieval.clone();
         let config = self.config.clone();
         let auth = self.auth.clone();
+        let debug_option = input.debug_option.clone();
 
         let s = stream! {
+            // Create a channel that will be closed when the client disconnects
+            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+            let _cleanup_trigger = tx;
+            let db_cleanup = db.clone();
+            let _disconnect_guard = tokio::spawn(async move {
+                rx.await.unwrap_or_default();
+                let _ = db_cleanup.delete_page_sections_without_content(page_id).await;
+            });
+
             let mut section_from_db = section_from_db(auth.clone(), section).await;
-            if debug {
+            if debug_option.as_ref().map(|x| x.return_chat_completion_request).unwrap_or(false) {
                 section_from_db.debug_data = section_title_debug_messages.map(|messages| PageSectionDebugData {
                     generate_section_titles_messages: messages,
                 });
             }
-            yield Ok(SectionRunItem::PageSectionCreated(section_from_db));
+            yield Ok(SectionRunItem::PageSectionCreated(section_from_db.into()));
 
             let mut attachments_stream = generate_section_with_attachments(
-                debug,
+                debug_option.as_ref(),
                 policy,
+                &page_id.as_id(),
                 section_id,
                 new_section_title,
                 Some(new_section_prompt),
@@ -353,7 +372,6 @@ impl PageServiceImpl {
                     .map(ToOwned::to_owned)
             })
         };
-        let thread_messages = thread_messages.map(ToOwned::to_owned);
 
         let page_id = self
             .db
@@ -361,13 +379,17 @@ impl PageServiceImpl {
             .await?
             .as_id();
 
-        let debug = debug_option
+        let thread_messages = thread_messages.map(|messages| {
+            filter_out_messages_doc_with_self_id(page_id.to_string().as_ref(), messages)
+        });
+
+        let debug_return_chat_request = debug_option
             .map(|x| x.return_chat_completion_request)
             .unwrap_or_else(|| false);
 
         let (page_title, title_debug_messages) = self
             .generate_page_title(
-                debug,
+                debug_return_chat_request,
                 policy,
                 &page_id,
                 title_prompt,
@@ -384,8 +406,22 @@ impl PageServiceImpl {
         let config = self.config.clone();
         let auth = self.auth.clone();
         let doc_query = doc_query.map(ToOwned::to_owned);
+        let page_rowid = page_id.as_rowid()?;
+        let debug_option = debug_option.map(|x| PageSectionRunDebugOptionInput {
+            return_chat_completion_request: x.return_chat_completion_request,
+            return_query_request: x.return_query_request,
+        });
 
         let s = stream! {
+            // Create a channel that will be closed when the client disconnects
+            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+            let _cleanup_trigger = tx;
+            let db_cleanup = db.clone();
+            let _disconnect_guard = tokio::spawn(async move {
+                rx.await.unwrap_or_default();
+                let _ = db_cleanup.delete_page_sections_without_content(page_rowid).await;
+            });
+
             yield Ok(PageRunItem::PageCreated(PageCreated {
                 id: page_id.clone(),
                 author_id: author_id.clone(),
@@ -396,7 +432,7 @@ impl PageServiceImpl {
             }));
 
             let (page_section_titles, section_titles_debug_messages) = generate_page_sections(
-                debug,
+                debug_return_chat_request,
                 3,
                 chat.clone(),
                 context.clone(),
@@ -409,7 +445,7 @@ impl PageServiceImpl {
             let mut page_sections = Vec::new();
             for section_title in &page_section_titles {
                 let section = db.create_page_section(page_id.as_rowid()?, section_title).await?;
-                page_sections.push(section_from_db(auth.clone(), section).await);
+                page_sections.push(section_from_db(auth.clone(), section).await.into());
             }
 
             yield Ok(PageRunItem::PageSectionsCreated(PageSectionsCreated {
@@ -421,7 +457,7 @@ impl PageServiceImpl {
             }));
 
             let (content_stream, content_debug_messages) = generate_page_content(
-                debug,
+                debug_return_chat_request,
                 chat.clone(),
                 context.clone(),
                 &policy,
@@ -452,8 +488,9 @@ impl PageServiceImpl {
                 let existed_sections = sections_from_db(auth.clone(), sections_in_db).await.into_iter().take(i).collect::<Vec<_>>();
 
                 let attachments_stream = generate_section_with_attachments(
-                    debug,
+                    debug_option.as_ref(),
                     policy.clone(),
+                    &page_id,
                     section.id.as_rowid()?,
                     section.title.clone(),
                     None,
@@ -614,6 +651,32 @@ async fn build_chat_messages(
     Ok(messages)
 }
 
+fn filter_out_messages_doc_with_self_id(page_id: &str, messages: &[Message]) -> Vec<Message> {
+    messages
+        .iter()
+        .map(|message| {
+            let mut message_clone = message.clone();
+            // Filter out any attachment of type "Page" with id equal to page_id
+            message_clone.attachment.doc = message_clone
+                .attachment
+                .doc
+                .iter()
+                .filter(|doc| {
+                    // Keep docs that are not of type "Page" or have different id
+                    if let MessageAttachmentDoc::Page(doc) = doc {
+                        doc.link == page_id
+                    } else {
+                        false
+                    }
+                })
+                .cloned()
+                .collect();
+
+            message_clone
+        })
+        .collect()
+}
+
 async fn generate_page_content(
     debug: bool,
     chat: Arc<dyn ChatCompletionStream>,
@@ -648,8 +711,9 @@ async fn generate_page_content(
 }
 
 async fn generate_section_with_attachments(
-    debug: bool,
+    debug: Option<&PageSectionRunDebugOptionInput>,
     policy: AccessPolicy,
+    page_id: &ID,
     section_id: i64,
     section_title: String,
     section_prompt: Option<String>,
@@ -667,10 +731,15 @@ async fn generate_section_with_attachments(
 ) -> Result<BoxStream<'static, Result<SectionRunItem>>> {
     let policy = policy.clone();
     let existing_sections = existing_sections.to_vec();
+    let page_id = page_id.to_string();
     let page_title = page_title.to_string();
     let thread_messages = thread_messages.map(ToOwned::to_owned);
     let context_info_helper = context.read(Some(&policy)).await?.helper();
     let doc_query = doc_query.map(ToOwned::to_owned);
+    let debug_chat_request = debug
+        .map(|d| d.return_chat_completion_request)
+        .unwrap_or(false);
+    let debug_query_request = debug.map(|d| d.return_query_request).unwrap_or(false);
 
     let stream = stream! {
         let mut attachment = SectionAttachment::default();
@@ -706,7 +775,7 @@ async fn generate_section_with_attachments(
                 &context_info_helper,
                 &CodeQueryInput {
                     source_id: Some(source_id.clone()),
-                    content: query_content,
+                    content: query_content.clone(),
                     ..Default::default()
                 },
                 &config.code_search_params,
@@ -718,10 +787,22 @@ async fn generate_section_with_attachments(
             if !hits.is_empty() {
                 let hits = hits.into_iter().map(|x| x.into()).collect::<Vec<_>>();
                 db.update_page_section_code_attachments(section_id, &attachment.code.iter().map(|c| c.into()).collect::<Vec<_>>()).await?;
+
+                let debug_data = if debug_query_request {
+                    Some(AttachmentCodeQueryDebugData {
+                        source_id: source_id.clone(),
+                        query: query_content,
+                    })
+                } else {
+                    None
+                };
+
                 yield Ok(SectionRunItem::PageSectionAttachmentCode(
                     PageSectionAttachmentCode {
                         id: section_id.as_id(),
                         codes: hits,
+
+                        debug_data,
                     }
                 ));
             }
@@ -732,6 +813,13 @@ async fn generate_section_with_attachments(
                 &context_info_helper,
                 &doc_query,
             ).await;
+            let hits = hits.iter().filter(|x| {
+                if let DocSearchDocument::Page(doc) = &x.doc {
+                    doc.link != page_id
+                } else {
+                    true
+                }
+            }).collect::<Vec<_>>();
 
             if !hits.is_empty() {
                 let hits = futures::future::join_all(hits.into_iter().map(|x| {
@@ -747,10 +835,21 @@ async fn generate_section_with_attachments(
                 })).await;
                 attachment.doc = hits.clone().into_iter().map(|x| x.doc).collect::<Vec<_>>();
                 db.update_page_section_doc_attachments(section_id, &attachment.doc.iter().map(|c| c.into()).collect::<Vec<_>>()).await?;
+
+                let debug_data = if debug_query_request {
+                    Some(AttachmentDocQueryDebugData {
+                        source_ids: doc_query.source_ids.clone().unwrap_or_default(),
+                        query: doc_query.content.clone(),
+                    })
+                } else {
+                    None
+                };
                 yield Ok(SectionRunItem::PageSectionAttachmentDoc(
                     PageSectionAttachmentDoc {
                         id: section_id.as_id(),
                         doc: hits,
+
+                        debug_data,
                     }
                 ));
             }
@@ -758,7 +857,7 @@ async fn generate_section_with_attachments(
 
         // Generate section content
         let (content_stream, debug_messages) = generate_page_section_content(
-            debug,
+            debug_chat_request,
             chat.clone(),
             context.clone(),
             &policy,
@@ -878,7 +977,7 @@ mod tests {
                 FakeContextService, FakeDocSearch,
             },
             retrieval,
-            service::thread,
+            service::{setting, thread},
         };
 
         let db = DbConn::new_in_memory().await.unwrap();
@@ -905,12 +1004,14 @@ mod tests {
         let serper = Some(Box::new(FakeDocSearch) as Box<dyn DocSearch>);
         let repo_service = make_repository_service(db.clone()).await.unwrap();
         let auth = Arc::new(FakeAuthService::new(vec![]));
+        let settings = Arc::new(setting::create(db.clone()));
 
         let retrieval = Arc::new(retrieval::create(
             code.clone(),
             doc.clone(),
             serper,
             repo_service.clone(),
+            settings,
         ));
         let service = create(
             PageConfig::default(),

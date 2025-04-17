@@ -1,8 +1,8 @@
 import { graphql } from '@/lib/gql/generates'
 
 export const createThreadToPageRunSubscription = graphql(/* GraphQL */ `
-  subscription createThreadToPageRun($threadId: ID!) {
-    createThreadToPageRun(threadId: $threadId) {
+  subscription createThreadToPageRun($input: CreateThreadToPageRunInput!) {
+    createThreadToPageRun(input: $input) {
       __typename
       ... on PageCreated {
         id
@@ -27,22 +27,6 @@ export const createThreadToPageRunSubscription = graphql(/* GraphQL */ `
           id
           position
           title
-          attachments {
-            code {
-              __typename
-              gitUrl
-              commit
-              filepath
-              language
-              content
-              startLine
-            }
-            codeFileList {
-              __typename
-              fileList
-              truncated
-            }
-          }
         }
         debugData {
           __typename
@@ -77,6 +61,10 @@ export const createThreadToPageRunSubscription = graphql(/* GraphQL */ `
             bm25
             embedding
           }
+        }
+        debugData {
+          sourceId
+          query
         }
       }
       ... on PageSectionAttachmentDoc {
@@ -121,8 +109,17 @@ export const createThreadToPageRunSubscription = graphql(/* GraphQL */ `
               }
               authorAt
             }
+            ... on AttachmentPageDoc {
+              link
+              title
+              content
+            }
           }
           score
+        }
+        debugData {
+          sourceIds
+          query
         }
       }
       ... on PageSectionContentDelta {
@@ -180,22 +177,6 @@ export const createPageRunSubscription = graphql(/* GraphQL */ `
           id
           position
           title
-          attachments {
-            code {
-              __typename
-              gitUrl
-              commit
-              filepath
-              language
-              content
-              startLine
-            }
-            codeFileList {
-              __typename
-              fileList
-              truncated
-            }
-          }
         }
         debugData {
           __typename
@@ -230,6 +211,10 @@ export const createPageRunSubscription = graphql(/* GraphQL */ `
             bm25
             embedding
           }
+        }
+        debugData {
+          sourceId
+          query
         }
       }
       ... on PageSectionAttachmentDoc {
@@ -274,8 +259,17 @@ export const createPageRunSubscription = graphql(/* GraphQL */ `
               }
               authorAt
             }
+            ... on AttachmentPageDoc {
+              link
+              title
+              content
+            }
           }
           score
+        }
+        debugData {
+          sourceIds
+          query
         }
       }
       ... on PageSectionContentDelta {
@@ -303,7 +297,7 @@ export const createPageSectionRunSubscription = graphql(/* GraphQL */ `
   subscription createPageSectionRun($input: CreatePageSectionRunInput!) {
     createPageSectionRun(input: $input) {
       __typename
-      ... on PageSection {
+      ... on PageSectionCreated {
         id
         title
         position
@@ -340,6 +334,10 @@ export const createPageSectionRunSubscription = graphql(/* GraphQL */ `
             embedding
           }
         }
+        debugData {
+          sourceId
+          query
+        }
       }
       ... on PageSectionAttachmentDoc {
         id
@@ -383,8 +381,17 @@ export const createPageSectionRunSubscription = graphql(/* GraphQL */ `
               }
               authorAt
             }
+            ... on AttachmentPageDoc {
+              link
+              title
+              content
+            }
           }
           score
+        }
+        debugData {
+          sourceIds
+          query
         }
       }
       ... on PageSectionContentDelta {
