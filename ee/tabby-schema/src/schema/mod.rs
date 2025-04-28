@@ -4,6 +4,7 @@ pub mod auth;
 pub mod constants;
 pub mod context;
 pub mod email;
+pub mod ingestion;
 pub mod integration;
 pub mod interface;
 pub mod job;
@@ -76,6 +77,7 @@ use self::{
         RequestInvitationInput, RequestPasswordResetEmailInput, UpdateOAuthCredentialInput,
     },
     email::{EmailService, EmailSetting, EmailSettingInput},
+    ingestion::{IngestionService, IngestionStats},
     integration::{Integration, IntegrationKind, IntegrationService},
     job::JobStats,
     license::{IsLicenseValid, LicenseInfo, LicenseService, LicenseType},
@@ -104,6 +106,7 @@ pub trait ServiceLocator: Send + Sync {
     fn completion(&self) -> Option<Arc<dyn CompletionStream>>;
     fn embedding(&self) -> Arc<dyn EmbeddingService>;
     fn logger(&self) -> Arc<dyn EventLogger>;
+    fn ingestion(&self) -> Arc<dyn IngestionService>;
     fn job(&self) -> Arc<dyn JobService>;
     fn repository(&self) -> Arc<dyn RepositoryService>;
     fn integration(&self) -> Arc<dyn IntegrationService>;
@@ -728,6 +731,14 @@ impl Query {
             },
         )
         .await
+    }
+
+    async fn ingestion_status(
+        ctx: &Context,
+        sources: Option<Vec<String>>,
+    ) -> Result<Vec<IngestionStats>> {
+        check_admin(ctx).await?;
+        ctx.locator.ingestion().stats(sources).await
     }
 
     async fn threads(

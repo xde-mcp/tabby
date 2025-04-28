@@ -3,12 +3,14 @@ use std::{path::Path, sync::Arc};
 use anyhow::anyhow;
 pub use attachment::{
     Attachment, AttachmentClientCode, AttachmentCode, AttachmentCodeFileList, AttachmentCommitDoc,
-    AttachmentDoc, AttachmentIssueDoc, AttachmentPageDoc, AttachmentPullDoc, AttachmentWebDoc,
+    AttachmentDoc, AttachmentIngestedDoc, AttachmentIssueDoc, AttachmentPageDoc, AttachmentPullDoc,
+    AttachmentWebDoc,
 };
 use cache::Cache;
 use cached::TimedSizedCache;
 use chrono::{DateTime, Utc};
 pub use email_setting::EmailSettingDAO;
+pub use ingestion::{IngestedDocumentDAO, IngestedDocumentStatusDAO, IngestionStatusDAO};
 pub use integrations::IntegrationDAO;
 pub use invitations::InvitationDAO;
 pub use job_runs::JobRunDAO;
@@ -32,6 +34,7 @@ mod access_policy;
 mod attachment;
 pub mod cache;
 mod email_setting;
+mod ingestion;
 mod integrations;
 mod invitations;
 mod job_runs;

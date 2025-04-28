@@ -7,6 +7,7 @@ pub mod context;
 mod email;
 pub mod embedding;
 pub mod event_logger;
+pub mod ingestion;
 pub mod integration;
 pub mod job;
 mod license;
@@ -54,6 +55,7 @@ use tabby_schema::{
     auth::{AuthenticationService, UserSecured},
     context::ContextService,
     email::EmailService,
+    ingestion::IngestionService,
     integration::IntegrationService,
     interface::UserValue,
     is_demo_mode,
@@ -87,6 +89,7 @@ struct ServerContext {
     repository: Arc<dyn RepositoryService>,
     integration: Arc<dyn IntegrationService>,
     user_event: Arc<dyn UserEventService>,
+    ingestion: Arc<dyn IngestionService>,
     job: Arc<dyn JobService>,
     web_documents: Arc<dyn WebDocumentService>,
     thread: Arc<dyn ThreadService>,
@@ -112,6 +115,7 @@ impl ServerContext {
         code: Arc<dyn CodeSearch>,
         repository: Arc<dyn RepositoryService>,
         integration: Arc<dyn IntegrationService>,
+        ingestion: Arc<dyn IngestionService>,
         job: Arc<dyn JobService>,
         answer: Option<Arc<AnswerService>>,
         retrieval: Arc<retrieval::RetrievalService>,
@@ -152,6 +156,7 @@ impl ServerContext {
             repository.git(),
             repository.third_party(),
             integration.clone(),
+            ingestion.clone(),
             repository.clone(),
             page.clone(),
             context.clone(),
@@ -175,6 +180,7 @@ impl ServerContext {
             repository,
             integration,
             user_event,
+            ingestion,
             job,
             logger,
             code,
@@ -330,6 +336,10 @@ impl ServiceLocator for ArcServerContext {
         self.0.notification.clone()
     }
 
+    fn ingestion(&self) -> Arc<dyn IngestionService> {
+        self.0.ingestion.clone()
+    }
+
     fn job(&self) -> Arc<dyn JobService> {
         self.0.job.clone()
     }
@@ -399,6 +409,7 @@ pub async fn create_service_locator(
     code: Arc<dyn CodeSearch>,
     repository: Arc<dyn RepositoryService>,
     integration: Arc<dyn IntegrationService>,
+    ingestion: Arc<dyn IngestionService>,
     job: Arc<dyn JobService>,
     answer: Option<Arc<AnswerService>>,
     retrieval: Arc<RetrievalService>,
@@ -419,6 +430,7 @@ pub async fn create_service_locator(
             code,
             repository,
             integration,
+            ingestion,
             job,
             answer,
             retrieval,
