@@ -63,7 +63,7 @@ use tabby_inference::{
     ChatCompletionStream, CompletionOptionsBuilder, CompletionStream, Embedding as EmbeddingService,
 };
 use thread::{CreateThreadAndRunInput, CreateThreadRunInput, ThreadRunStream, ThreadService};
-use tracing::{error, warn};
+use tracing::warn;
 use user_group::{
     CreateUserGroupInput, UpsertUserGroupMembershipInput, UserGroup, UserGroupService,
 };
@@ -94,7 +94,7 @@ use self::{
     web_documents::{CreateCustomDocumentInput, CustomWebDocument, WebDocumentService},
 };
 use crate::{
-    env,
+    env, is_demo_mode,
     juniper::relay::{self, query_async, Connection},
     web_documents::{PresetWebDocument, SetPresetDocumentActiveInput},
 };
@@ -1119,6 +1119,12 @@ impl Mutation {
     }
 
     async fn password_change(ctx: &Context, input: PasswordChangeInput) -> Result<bool> {
+        if is_demo_mode() {
+            return Err(CoreError::Forbidden(
+                "Changing password is disabled in Demo mode.",
+            ));
+        }
+
         let claims = check_claims(ctx)?;
         input.validate()?;
         ctx.locator
